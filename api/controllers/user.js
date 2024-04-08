@@ -3,6 +3,7 @@
 var bcrypt = require('bcrypt');
 var mongoosePaginate = require('mongoose-pagination');
 var User = require('../models/user');
+var Follow = require('../models/follow');
 var fs = require('fs');
 var path = require('path');
 const { restart } = require('nodemon');
@@ -138,50 +139,184 @@ function loginUser(req, res) {
 }
 
 
-//Cpnseguir datos de un usuario
+//Conseguir datos de un usuario
 function getUser(req, res) {
     var userId = req.params.id;
+    console.log('userid:'+userId);
 
     User.findById(userId)
         .then((user) => {
             if (!user)
                 return res.status(404).send({ message: 'El usuario no existe' })
-            return res.status(200).send({ user });
+                console.log('user.sub'+req.user.sub);
+            
+                followThisUser(req.user.sub, userId)
+                .then((value) => {
+                    return res.status(200).send({user,'following':value.following, 'followed':value.followed});
+                })
+                .catch((err) => {
+                    console.error('Error al verificar el seguimiento:', err);
+                    return res.status(500).send({ message: 'Error al verificar el seguimiento' });
+                });
+            // Follow.findOne({"user":req.user.sub, "followed":userId})
+            // .then((follow) => {
+            //     if (!follow) {
+            //         return res.status(500).send({ message: 'Error al comprobar el seguimiento' });
+            //     }
+            //     return res.status(200).send({ user, follow });
+            // });
+            
         })
         .catch((err) => {
             return res.status(500).send({ message: 'Error en la petición' });
         });
+
+
+}
+
+async function followThisUser(identity_user_id, user_id) {
+    try {
+        var following = await Follow.findOne({'user':identity_user_id, 'followed': user_id});
+        // .populate(('user followed'));
+        if (!following) return { following: false, followed: false };
+
+        var followed = await Follow.findOne({'user': user_id, 'followed':identity_user_id});
+        //.populate(('user followed'));;
+        if (!followed) return { following: true, followed: false };
+
+        return {
+            following: following,
+            followed: followed
+        }
+    } catch (err) {
+        console.error('Error al buscar el seguimiento: ', err)
+        throw new Error('Error al buscar el seguimiento');
+    }
+    
 }
 
 //Devolver un listado de usuarios paginado
-function getUsers(req, res) {
-    var identity_user_id = req.user.sub;
-    var page = 1;
+// function getUsers(req, res) {
+//     var identity_user_id = req.user.sub;
+//     var page = 1;
 
-    if (req.params.page) {
-        page = req.params.page;
+//     if (req.params.page) {
+//         page = req.params.page;
+//     }
+
+//     var itemsPerPage = 5;
+
+//     var usersQuery = User.find().sort('_id').skip((page - 1) * itemsPerPage).limit(itemsPerPage);
+//     var countQuery = User.countDocuments();
+
+//     Promise.all([usersQuery, countQuery])
+//         .then(([users, total]) => {
+//             if (total === 0) {
+//                 return res.status(404).send({ message: 'No hay usuarios disponibles' });
+//             }
+
+//             return res.status(200).send({
+//                 users,
+//                 total,
+//                 pages: Math.ceil(total / itemsPerPage)
+//             });
+//         })
+//         .catch((err) => {
+//             return res.status(500).send({ message: 'Error en la petición' });
+//         });
+// }
+
+async function getUsers(req, res) {
+    try {
+        var identity_user_id = req.user.sub;
+        var page = 1;
+
+        if (req.params.page) {
+            page = req.params.page;
+        }
+
+        var itemsPerPage = 5;
+
+        // Consulta de usuarios
+        var usersQuery = User.find({})
+            .sort('_id')
+            .skip((page - 1) * itemsPerPage)
+            .limit(itemsPerPage);
+
+        // Consulta del número total de usuarios
+        var countQuery = User.countDocuments();
+
+        // Ejecuta ambas consultas de forma paralela
+        var [users, total] = await Promise.all([usersQuery, countQuery]);
+
+        if (total === 0) {
+            return res.status(404).send({ message: 'No hay usuarios disponibles' });
+        }
+
+        // Obtiene los IDs de los usuarios seguidos y seguidores
+        var { following, followed } = await followUserIds(identity_user_id);
+
+        // Devuelve la respuesta con los usuarios y los IDs de los usuarios seguidos y seguidores
+        return res.status(200).send({
+            users,
+            users_following: following,
+            users_follow_me: followed,
+            total,
+            pages: Math.ceil(total / itemsPerPage)
+        });
+    } catch (error) {
+        console.error('Error en getUsers:', error);
+        return res.status(500).send({ message: 'Error en la petición' });
+    }
+}
+
+
+
+async function followUserIds(user_id) {
+    try {
+        // Consulta para encontrar los usuarios que sigue el usuario dado
+        var following = await Follow.find({'user': user_id}).select({'_id': 0, '__v': 0, 'user': 0});
+        var followingIds = following.map(follow => follow.followed);
+
+        // Consulta para encontrar los usuarios que siguen al usuario dado
+        var followed = await Follow.find({'followed': user_id}).select({'_id': 0, '__v': 0, 'followed': 0});
+        var followedIds = followed.map(follow => follow.user);
+
+        return {
+            following: followingIds,
+            followed: followedIds
+        };
+    } catch (error) {
+        console.error('Error al buscar los usuarios que sigue el usuario:', error);
+        throw new Error('Error al buscar los usuarios que sigue el usuario');
+    }
+}
+
+function getCounters(req,res) {
+    var userId = req.user.sub;
+    if(req.params.id){
+        userId = req.params.id;
     }
 
-    var itemsPerPage = 5;
+    getCountFollow(userId).then((value) => {
+        return res.status(200).send(value);
+    });
+}
 
-    var usersQuery = User.find().sort('_id').skip((page - 1) * itemsPerPage).limit(itemsPerPage);
-    var countQuery = User.countDocuments();
+async function getCountFollow(user_id) {
+    try {
+        var following = await Follow.countDocuments({'user':user_id});
+        var followed = await Follow.countDocuments({'followed':user_id});
 
-    Promise.all([usersQuery, countQuery])
-        .then(([users, total]) => {
-            if (total === 0) {
-                return res.status(404).send({ message: 'No hay usuarios disponibles' });
-            }
-
-            return res.status(200).send({
-                users,
-                total,
-                pages: Math.ceil(total / itemsPerPage)
-            });
-        })
-        .catch((err) => {
-            return res.status(500).send({ message: 'Error en la petición' });
-        });
+        return {
+            following:following,
+            followed:followed
+        }
+    } catch (error) {
+        console.error('Error en getCountFollow:', error);
+        throw new Error('Error al obtener el recuento de seguidores');
+    }
+    
 }
 
 //Edición de datos de usuario
@@ -302,8 +437,9 @@ module.exports = {
     loginUser,
     getUser,
     getUsers,
+    getCounters,
     updateUser,
     uploadImage,
-    getImageFile
+    getImageFile,
 }
 

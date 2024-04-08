@@ -122,6 +122,32 @@ function getFollowedUsers(req, res) {
         });
 }
 
+//devolver listado de usuarios
+function getMyFollows(req, res) {
+    var userId = req.user.sub;
+
+    var find = Follow.find({ user: userId });
+
+    if (req.params.followed) {
+        find = Follow.find({ followed: userId });
+    }
+
+    find.populate('followed user')
+        .then(follows => {
+            if (!follows || follows.length === 0) {
+                return res.status(404).send({ message: 'No sigues a ningún usuario' });
+            }
+            return res.status(200).send({ follows });
+        })
+        .catch(err => {
+            return res.status(500).send({ message: 'Error en el servidor', error: err });
+        });
+}
+
+
+
+
+
 
 
 
@@ -132,5 +158,6 @@ module.exports = {
     saveFollow,
     deleteFollow,
     getFollowingUsers,
-    getFollowedUsers
+    getFollowedUsers,
+    getMyFollows
 }
